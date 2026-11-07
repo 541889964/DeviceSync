@@ -145,21 +145,37 @@ class SyncNodeService : Service(), SensorEventListener {
 
     private fun startServer() {
         scope.launch {
-            runCatching {
+            try {
                 val ss = ServerSocket(PORT).apply { reuseAddress = true }
                 serverSocket = ss
                 while (isActive) {
-                    val s = ss.accept()
-                    val reader = s.getInputStream().bufferedReader()
-                    val hs = JSONObject(reader.readLine() ?: continue)
-                    val id = hs.optString("deviceId")
-                    if (id.isBlank() || id == myId) { s.close(); continue }
-                    peers.remove(id)?.socket?.close()
-                    peers[id] = Peer(s, id, hs.optString("deviceType", "phone"))
-                    attachReader(id, s)
-                    pushTo(id, selfJson())
+                    val s = try {
+                        ss.accept()
+                    } catch (e: Exception) {
+                        break
+                    }
+                    
+                    scope.launch {
+                        try {
+                            val reader = s.getInputStream().bufferedReader()
+                            val hs = JSONObject(reader.readLine() ?: return@launch)
+                            val id = hs.optString("deviceId")
+                            if (id.isBlank() || id == myId) {
+                                s.close()
+                                return@launch
+                            }
+                            peers.remove(id)?.socket?.close()
+                            peers[id] = Peer(s, id, hs.optString("deviceType", "phone"))
+                            attachReader(id, s)
+                            pushTo(id, selfJson())
+                        } catch (e: Exception) {
+                            runCatching { s.close() }
+                        }
+                    }
                 }
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                // Socket 创建异常忽略
+            }
         }
     }
 
@@ -178,6 +194,8 @@ class SyncNodeService : Service(), SensorEventListener {
                         "shake" -> broadcastSelf()
                     }
                 }
+            } catch (e: Exception) {
+                // 忽略读取异常
             } finally {
                 peers.remove(id)?.socket?.close()
                 PeerStateRepo.removePeer(id)
